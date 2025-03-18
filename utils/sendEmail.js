@@ -36,7 +36,7 @@ const sendEmail = async (to, subject, html) => {
  */
 export const sendVerificationEmail = async (email, name, verificationToken) => {
   const subject = "Email Verification";
-  const verificationLink = `http://https://gamestar-dotcom.github.io/Doctor-Booking-App/verify-email/${verificationToken}`;
+  const verificationLink = `https://gamestar-dotcom.github.io/Doctor-Booking-App/verify-email/${verificationToken}`;
   const html = `
     <p>Hello ${name},</p>
     <p>Click the link below to verify your email:</p>
