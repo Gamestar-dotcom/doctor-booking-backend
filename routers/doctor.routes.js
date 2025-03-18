@@ -20,7 +20,11 @@ router.get(
     `);
 
       if (doctors.length === 0) {
-        return res.status(404).json({ message: "No doctors found" });
+        return res
+          .status(404)
+          .json({
+            message: "No doctors available at the moment, Come back later",
+          });
       }
 
       res.json(doctors);

@@ -320,8 +320,9 @@ router.post(
           pass: process.env.EMAIL_PASS,
         },
       });
+      // const resetLink = `https://gamestar-dotcom.github.io/Doctor-Booking-App/reset-password?token=${token}`;
 
-      const resetLink = `https://gamestar-dotcom.github.io/Doctor-Booking-App/reset-password?token=${token}`;
+      const resetLink = `http://localhost:5173/reset-password?token=${token}`;
       const mailOptions = {
         from: process.env.EMAIL_USER,
         to: email,
