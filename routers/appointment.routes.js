@@ -108,6 +108,10 @@ router.get(
         JOIN users doc ON d.user_id = doc.id
       `;
       }
+      // return no appointments if length === 0
+      if (params.length === 0) {
+        return res.status(404).json({ message: "No appointments found" });
+      }
 
       const [appointments] = await conn.query(query, params);
       res.json(appointments);

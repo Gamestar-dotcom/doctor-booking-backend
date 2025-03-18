@@ -19,6 +19,10 @@ router.get(
       JOIN users u ON d.user_id = u.id
     `);
 
+      if (doctors.length === 0) {
+        return res.status(404).json({ message: "No doctors found" });
+      }
+
       res.json(doctors);
     } catch (error) {
       console.error(error);
