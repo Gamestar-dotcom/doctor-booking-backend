@@ -111,6 +111,7 @@ router.post(
 router.post("/callback", async (req, res) => {
   try {
     const { Body } = req.body;
+    console.log("Received M-Pesa Callback:", req.body); // Log the full request
 
     if (!Body || !Body.stkCallback) {
       return res.status(400).json({ message: "Invalid callback data" });
@@ -161,6 +162,27 @@ router.get("/payments", authenticateToken, async (req, res) => {
   } catch (error) {
     console.error("Error fetching payments:", error.message);
     res.status(500).json({ message: "Failed to fetch payments." });
+  }
+});
+router.get("/payment-status/:checkoutRequestId", async (req, res) => {
+  const { checkoutRequestId } = req.params;
+
+  try {
+    // Check if the payment exists in the database
+    const [rows] = await conn.execute(
+      "SELECT status FROM payments WHERE mpesa_receipt = ?",
+      [checkoutRequestId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ message: "Payment not found" });
+    }
+
+    // Return the payment status
+    res.json({ status: rows[0].status });
+  } catch (error) {
+    console.error("Error fetching payment status:", error);
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
