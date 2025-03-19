@@ -35,6 +35,12 @@ router.post(
       if (existingUsers.length > 0) {
         return res.status(400).json({ message: "User already exists" });
       }
+      // block a role admin trying to register
+      if (role === "admin") {
+        return res
+          .status(403)
+          .json({ message: "You are not allowed to register as an admin." });
+      }
 
       // Hash password
       const salt = await bcrypt.genSalt(10);
