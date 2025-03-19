@@ -6,7 +6,7 @@ import authRoutes from "./routers/auth.routes.js";
 import conn from "./connectDB/DB.js";
 import doctorRoutes from "./routers/doctor.routes.js";
 import appointmentRoutes from "./routers/appointment.routes.js";
-import paymentRoutes from "./routers/payment.routes.js";
+
 import adminRoutes from "./routers/admin.routes.js";
 import mpesaRoutes from "./routers/mpesa.routes.js";
 
@@ -56,7 +56,7 @@ app.options("*", (req, res) => {
 app.use("/api/users", authRoutes);
 app.use("/api/doctor", doctorRoutes);
 app.use("/api/appointment", appointmentRoutes);
-app.use("/api/payment", paymentRoutes);
+
 app.use("/api/admin", adminRoutes);
 app.use("/api/mpesa", mpesaRoutes);
 

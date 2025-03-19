@@ -109,75 +109,37 @@ router.post(
 
 // ✅ Handle MPesa Callback
 router.post("/callback", async (req, res) => {
-  console.log("MPesa Callback Received:", req.body);
-
-  const { Body } = req.body;
-  if (!Body || !Body.stkCallback) {
-    return res.status(400).json({ message: "Invalid callback data" });
-  }
-
-  const callbackData = Body.stkCallback;
-  const resultCode = callbackData.ResultCode;
-  const resultDesc = callbackData.ResultDesc;
-  const mpesaReceipt = callbackData.CheckoutRequestID;
-
-  // Start database transaction
-  const connection = await conn.getConnection();
   try {
-    await connection.beginTransaction();
+    const { Body } = req.body;
 
-    if (resultCode === 0) {
-      // ✅ Payment was successful
-      const metadata = callbackData.CallbackMetadata;
-
-      const transactionId =
-        metadata.Item.find((item) => item.Name === "MpesaReceiptNumber")
-          ?.Value || null;
-      const amount =
-        metadata.Item.find((item) => item.Name === "Amount")?.Value || null;
-      const phoneNumber =
-        metadata.Item.find((item) => item.Name === "PhoneNumber")?.Value ||
-        null;
-      const transactionDate =
-        metadata.Item.find((item) => item.Name === "TransactionDate")?.Value ||
-        null;
-
-      console.log("✅ Payment Successful:", {
-        transactionId,
-        amount,
-        phoneNumber,
-      });
-
-      // ✅ Update the `payments` table with actual transaction details
-      await connection.execute(
-        "UPDATE payments SET status = ?, mpesa_receipt = ?, transaction_date = ? WHERE mpesa_receipt = ?",
-        ["Completed", transactionId, transactionDate, mpesaReceipt]
-      );
-
-      await connection.commit();
-      console.log("💾 Payment updated in database.");
-      res.status(200).json({ message: "Payment recorded successfully." });
-    } else {
-      // ❌ Payment failed
-      console.log("❌ Payment Failed:", resultDesc);
-
-      // ✅ Update the `payments` table with failure status
-      await connection.execute(
-        "UPDATE payments SET status = ?, failure_reason = ? WHERE mpesa_receipt = ?",
-        ["Failed", resultDesc, mpesaReceipt]
-      );
-
-      await connection.commit();
-      res.status(200).json({ message: "Payment failure recorded." });
+    if (!Body || !Body.stkCallback) {
+      return res.status(400).json({ message: "Invalid callback data" });
     }
+
+    const { MerchantRequestID, CheckoutRequestID, ResultCode, ResultDesc } =
+      Body.stkCallback;
+
+    // Check if the transaction was successful (ResultCode 0 means success)
+    const status = ResultCode === 0 ? "Completed" : "Failed";
+
+    // If successful, extract MPesa receipt number
+    const mpesaReceipt =
+      ResultCode === 0
+        ? Body.stkCallback.CallbackMetadata.Item.find(
+            (item) => item.Name === "MpesaReceiptNumber"
+          )?.Value
+        : null;
+
+    // Update payment status in the database
+    await conn.execute(
+      `UPDATE payments SET status = ?, mpesa_receipt = ? WHERE mpesa_receipt = ?`,
+      [status, mpesaReceipt || "N/A", CheckoutRequestID]
+    );
+
+    res.status(200).json({ message: "Payment status updated successfully" });
   } catch (error) {
-    await connection.rollback();
-    console.error("❌ Database Transaction Error:", error.message);
-    res
-      .status(500)
-      .json({ message: "Database error while processing payment." });
-  } finally {
-    connection.release();
+    console.error("MPesa Callback Error:", error);
+    res.status(500).json({ message: "Failed to process callback" });
   }
 });
 
