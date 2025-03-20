@@ -47,12 +47,18 @@ router.post(
     }
 
     try {
+      // Debug info
+      console.log("STK Push Request:", JSON.stringify(req.body, null, 2));
+      console.log("User ID from token:", req.user.id);
+
       const accessToken = await getAccessToken();
       if (!accessToken) {
+        console.error("Failed to get M-Pesa access token");
         return res
           .status(500)
           .json({ message: "Failed to get MPesa access token" });
       }
+      console.log("Got M-Pesa access token successfully");
 
       const { phoneNumber, amount } = req.body;
       const userId = req.user.id; // Get user ID from token
@@ -78,6 +84,9 @@ router.post(
         TransactionDesc: "Booking Payment",
       };
 
+      console.log("M-Pesa STK Push Payload:", JSON.stringify(payload, null, 2));
+      console.log("M-Pesa Callback URL:", process.env.MPESA_CALLBACK_URL);
+
       const { data } = await axios.post(
         "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest",
         payload,
@@ -89,12 +98,21 @@ router.post(
         }
       );
 
+      console.log("M-Pesa STK Push Response:", JSON.stringify(data, null, 2));
+
       // ✅ Store the pending payment in the `payments` table
+      const checkoutRequestId = data.CheckoutRequestID;
+      console.log(
+        `Storing payment with CheckoutRequestID: ${checkoutRequestId}`
+      );
+
       await conn.execute(
         `INSERT INTO payments (mpesa_receipt, phone_number, amount, status, user_id) 
        VALUES (?, ?, ?, ?, ?)`,
-        [data.CheckoutRequestID, phoneNumber, amount, "Pending", userId]
+        [checkoutRequestId, phoneNumber, amount, "Pending", userId]
       );
+
+      console.log("Payment record inserted successfully");
 
       res.status(200).json(data);
     } catch (error) {
@@ -102,52 +120,154 @@ router.post(
         "MPesa STK Push Error:",
         error.response?.data || error.message
       );
+      console.error("Full error:", error);
       res.status(500).json({ message: "Failed to initiate STK Push" });
     }
   }
 );
 
-// ✅ Handle MPesa Callback
+// ✅ Handle MPesa Callback with enhanced debugging
 router.post("/callback", async (req, res) => {
-  try {
-    const { Body } = req.body;
-    console.log("Received M-Pesa Callback:", JSON.stringify(req.body, null, 2)); // Better logging
+  console.log("=== M-PESA CALLBACK RECEIVED ===");
+  console.log("Callback timestamp:", new Date().toISOString());
+  console.log("Callback headers:", JSON.stringify(req.headers, null, 2));
+  console.log("Callback body (raw):", JSON.stringify(req.body, null, 2));
 
-    if (!Body || !Body.stkCallback) {
-      return res.status(400).json({ message: "Invalid callback data" });
+  try {
+    // Validate callback structure
+    if (!req.body || typeof req.body !== "object") {
+      console.error("Invalid callback: body is not an object");
+      return res
+        .status(200)
+        .json({
+          resultCode: 0,
+          resultDesc: "Callback received but invalid format",
+        });
     }
 
-    const { MerchantRequestID, CheckoutRequestID, ResultCode, ResultDesc } =
-      Body.stkCallback;
+    const { Body } = req.body;
+
+    if (!Body || !Body.stkCallback) {
+      console.error("Invalid callback: missing Body.stkCallback");
+      console.error(
+        "Received body structure:",
+        Object.keys(req.body).join(", ")
+      );
+      return res
+        .status(200)
+        .json({
+          resultCode: 0,
+          resultDesc: "Callback received but missing stkCallback",
+        });
+    }
+
+    const {
+      MerchantRequestID,
+      CheckoutRequestID,
+      ResultCode,
+      ResultDesc,
+      CallbackMetadata,
+    } = Body.stkCallback;
+
+    console.log("Extracted callback data:", {
+      MerchantRequestID,
+      CheckoutRequestID,
+      ResultCode,
+      ResultDesc,
+      CallbackMetadata: CallbackMetadata || "Not provided",
+    });
 
     // Check if the transaction was successful (ResultCode 0 means success)
     const status = ResultCode === 0 ? "Completed" : "Failed";
+    console.log(`Setting payment status to: ${status}`);
 
     // First, query to check if this payment exists
-    const [payments] = await conn.execute(
+    console.log(
+      `Looking for payment with mpesa_receipt = ${CheckoutRequestID}`
+    );
+    const [existingPayments] = await conn.execute(
       `SELECT * FROM payments WHERE mpesa_receipt = ?`,
       [CheckoutRequestID]
     );
 
-    if (payments.length === 0) {
-      console.log(
-        `Payment with CheckoutRequestID ${CheckoutRequestID} not found in database`
-      );
-      return res.status(404).json({ message: "Payment record not found" });
-    }
-
-    // Update payment status in the database
-    // Keep the CheckoutRequestID in mpesa_receipt field
-    await conn.execute(
-      `UPDATE payments SET status = ? WHERE mpesa_receipt = ?`,
-      [status, CheckoutRequestID]
+    console.log(
+      `Found ${existingPayments.length} matching payments in database`
     );
 
-    console.log(`Payment updated successfully for ${CheckoutRequestID}`);
-    res.status(200).json({ message: "Payment status updated successfully" });
+    if (existingPayments.length === 0) {
+      // Try with wildcard search as fallback
+      console.log("No exact match found, trying wildcard search");
+      const [wildcardPayments] = await conn.execute(
+        `SELECT * FROM payments WHERE mpesa_receipt LIKE ?`,
+        [`%${CheckoutRequestID}%`]
+      );
+
+      console.log(`Wildcard search found ${wildcardPayments.length} payments`);
+
+      if (wildcardPayments.length === 0) {
+        console.error(
+          `Payment with CheckoutRequestID ${CheckoutRequestID} not found in database`
+        );
+        return res
+          .status(200)
+          .json({
+            resultCode: 0,
+            resultDesc: "Callback received but payment not found",
+          });
+      }
+
+      // Use the first matching payment from wildcard search
+      const paymentId = wildcardPayments[0].id;
+      console.log(`Using payment ID ${paymentId} from wildcard search`);
+
+      // Update payment status
+      await conn.execute(`UPDATE payments SET status = ? WHERE id = ?`, [
+        status,
+        paymentId,
+      ]);
+
+      console.log(`Updated payment status to ${status} for ID ${paymentId}`);
+    } else {
+      // Update payment status with exact match
+      await conn.execute(
+        `UPDATE payments SET status = ? WHERE mpesa_receipt = ?`,
+        [status, CheckoutRequestID]
+      );
+
+      console.log(
+        `Updated payment status to ${status} for mpesa_receipt ${CheckoutRequestID}`
+      );
+    }
+
+    // Additional validation to confirm the update worked
+    const [verifyUpdate] = await conn.execute(
+      `SELECT * FROM payments WHERE mpesa_receipt = ?`,
+      [CheckoutRequestID]
+    );
+
+    console.log(
+      "Post-update payment record:",
+      JSON.stringify(verifyUpdate[0] || "Not found", null, 2)
+    );
+
+    console.log(
+      `M-Pesa callback processed successfully at ${new Date().toISOString()}`
+    );
+    res
+      .status(200)
+      .json({ resultCode: 0, resultDesc: "Callback processed successfully" });
   } catch (error) {
-    console.error("MPesa Callback Error:", error);
-    res.status(500).json({ message: "Failed to process callback" });
+    console.error("=== M-PESA CALLBACK ERROR ===");
+    console.error("Error message:", error.message);
+    console.error("Error stack:", error.stack);
+
+    // Always respond with 200 to M-Pesa to acknowledge receipt
+    res
+      .status(200)
+      .json({
+        resultCode: 0,
+        resultDesc: "Callback received with processing errors",
+      });
   }
 });
 
@@ -155,11 +275,14 @@ router.post("/callback", async (req, res) => {
 router.get("/payments", authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id; // Get user ID from token
+    console.log(`Fetching payments for user ID: ${userId}`);
 
     const [rows] = await conn.execute(
       "SELECT * FROM payments WHERE user_id = ? ORDER BY created_at DESC",
       [userId]
     );
+
+    console.log(`Found ${rows.length} payments for user ID ${userId}`);
 
     if (rows.length === 0) {
       return res.status(404).json({ message: "No payments found." });
@@ -168,27 +291,66 @@ router.get("/payments", authenticateToken, async (req, res) => {
     res.status(200).json({ payments: rows });
   } catch (error) {
     console.error("Error fetching payments:", error.message);
+    console.error("Error stack:", error.stack);
     res.status(500).json({ message: "Failed to fetch payments." });
   }
 });
+
+// ✅ Get payment status by checkout request ID
 router.get("/payment-status/:checkoutRequestId", async (req, res) => {
   const { checkoutRequestId } = req.params;
+  console.log(
+    `Checking payment status for checkoutRequestId: ${checkoutRequestId}`
+  );
 
   try {
-    // Check if the payment exists in the database
-    const [rows] = await conn.execute(
-      "SELECT status FROM payments WHERE mpesa_receipt = ?",
+    // First try exact match
+    const [exactRows] = await conn.execute(
+      "SELECT id, status, created_at, updated_at FROM payments WHERE mpesa_receipt = ?",
       [checkoutRequestId]
     );
 
-    if (rows.length === 0) {
-      return res.status(404).json({ message: "Payment not found" });
+    console.log(`Exact match search found ${exactRows.length} payments`);
+
+    // If no exact match, try substring match
+    if (exactRows.length === 0) {
+      console.log("No exact match found, trying substring match");
+      const [wildcardRows] = await conn.execute(
+        "SELECT id, status, created_at, updated_at FROM payments WHERE mpesa_receipt LIKE ?",
+        [`%${checkoutRequestId}%`]
+      );
+
+      console.log(`Substring match found ${wildcardRows.length} payments`);
+
+      if (wildcardRows.length === 0) {
+        console.log("No payment found with either search method");
+        return res.status(404).json({ message: "Payment not found" });
+      }
+
+      // Return the most recent matching payment
+      console.log(
+        "Returning status from substring match:",
+        wildcardRows[0].status
+      );
+      return res.json({
+        status: wildcardRows[0].status,
+        payment_id: wildcardRows[0].id,
+        created_at: wildcardRows[0].created_at,
+        updated_at: wildcardRows[0].updated_at,
+      });
     }
 
-    // Return the payment status
-    res.json({ status: rows[0].status });
+    // Return the payment status from exact match
+    console.log("Returning status from exact match:", exactRows[0].status);
+    res.json({
+      status: exactRows[0].status,
+      payment_id: exactRows[0].id,
+      created_at: exactRows[0].created_at,
+      updated_at: exactRows[0].updated_at,
+    });
   } catch (error) {
     console.error("Error fetching payment status:", error);
+    console.error("Error stack:", error.stack);
     res.status(500).json({ message: "Internal server error" });
   }
 });
