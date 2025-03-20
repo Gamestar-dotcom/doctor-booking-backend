@@ -72,7 +72,7 @@ router.get(
         JOIN doctors d ON a.doctor_id = d.id
         JOIN users u ON d.user_id = u.id
         WHERE a.patient_id = ?
-      `;
+        `;
         params = [req.user.id];
       } else if (req.user.role === "doctor") {
         // Doctors can only see appointments assigned to them
@@ -87,7 +87,7 @@ router.get(
         JOIN users u ON a.patient_id = u.id
         JOIN doctors d ON a.doctor_id = d.id
         WHERE d.user_id = ?
-      `;
+        `;
         params = [req.user.id];
       } else if (req.user.role === "admin") {
         // Admins can see all appointments with full details
@@ -106,14 +106,28 @@ router.get(
         JOIN users p ON a.patient_id = p.id
         JOIN doctors d ON a.doctor_id = d.id
         JOIN users doc ON d.user_id = doc.id
-      `;
-      }
-      // return no appointments if length === 0
-      if (params.length === 0) {
-        return res.status(404).json({ message: "No appointments found" });
+        `;
+        // No params needed for admin query
+      } else {
+        // Unauthorized role
+        return res.status(403).json({ message: "Unauthorized access" });
       }
 
-      const [appointments] = await conn.query(query, params);
+      // Execute the appropriate query based on role
+      let appointments;
+      if (req.user.role === "admin") {
+        // For admin, run query without parameters
+        [appointments] = await conn.query(query);
+      } else {
+        // For patients and doctors, use the parameters
+        [appointments] = await conn.query(query, params);
+      }
+
+      // Check if any appointments were found
+      if (appointments.length === 0) {
+        return res.json({ message: "No appointments found", data: [] });
+      }
+
       res.json(appointments);
     } catch (error) {
       console.error(error);
@@ -194,4 +208,7 @@ router.put(
   })
 );
 
+// get using req.user
+
+router.get("/");
 export default router;
