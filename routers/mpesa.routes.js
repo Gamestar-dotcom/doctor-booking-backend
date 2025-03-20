@@ -130,35 +130,22 @@ router.post(
 router.post("/callback", async (req, res) => {
   console.log("=== M-PESA CALLBACK RECEIVED ===");
   console.log("Callback timestamp:", new Date().toISOString());
-  console.log("Callback headers:", JSON.stringify(req.headers, null, 2));
-  console.log("Callback body (raw):", JSON.stringify(req.body, null, 2));
+  console.log("Raw Callback Body:", JSON.stringify(req.body, null, 2));
 
   try {
-    // Validate callback structure
     if (!req.body || typeof req.body !== "object") {
       console.error("Invalid callback: body is not an object");
       return res
         .status(200)
-        .json({
-          resultCode: 0,
-          resultDesc: "Callback received but invalid format",
-        });
+        .json({ resultCode: 0, resultDesc: "Invalid callback format" });
     }
 
     const { Body } = req.body;
-
     if (!Body || !Body.stkCallback) {
       console.error("Invalid callback: missing Body.stkCallback");
-      console.error(
-        "Received body structure:",
-        Object.keys(req.body).join(", ")
-      );
       return res
         .status(200)
-        .json({
-          resultCode: 0,
-          resultDesc: "Callback received but missing stkCallback",
-        });
+        .json({ resultCode: 0, resultDesc: "Missing stkCallback" });
     }
 
     const {
@@ -177,11 +164,17 @@ router.post("/callback", async (req, res) => {
       CallbackMetadata: CallbackMetadata || "Not provided",
     });
 
-    // Check if the transaction was successful (ResultCode 0 means success)
-    const status = ResultCode === 0 ? "Completed" : "Failed";
+    // Convert ResultCode to number to avoid type mismatch issues
+    const status = Number(ResultCode) === 0 ? "Completed" : "Failed";
     console.log(`Setting payment status to: ${status}`);
 
-    // First, query to check if this payment exists
+    // Ensure database connection exists
+    if (!conn) {
+      console.error("Database connection missing!");
+      return res.status(500).json({ message: "Database error" });
+    }
+
+    // Check if the payment exists
     console.log(
       `Looking for payment with mpesa_receipt = ${CheckoutRequestID}`
     );
@@ -190,69 +183,30 @@ router.post("/callback", async (req, res) => {
       [CheckoutRequestID]
     );
 
-    console.log(
-      `Found ${existingPayments.length} matching payments in database`
-    );
+    console.log(`Found ${existingPayments.length} matching payments`);
 
     if (existingPayments.length === 0) {
-      // Try with wildcard search as fallback
-      console.log("No exact match found, trying wildcard search");
-      const [wildcardPayments] = await conn.execute(
-        `SELECT * FROM payments WHERE mpesa_receipt LIKE ?`,
-        [`%${CheckoutRequestID}%`]
+      console.error(
+        `Payment with CheckoutRequestID ${CheckoutRequestID} not found`
       );
-
-      console.log(`Wildcard search found ${wildcardPayments.length} payments`);
-
-      if (wildcardPayments.length === 0) {
-        console.error(
-          `Payment with CheckoutRequestID ${CheckoutRequestID} not found in database`
-        );
-        return res
-          .status(200)
-          .json({
-            resultCode: 0,
-            resultDesc: "Callback received but payment not found",
-          });
-      }
-
-      // Use the first matching payment from wildcard search
-      const paymentId = wildcardPayments[0].id;
-      console.log(`Using payment ID ${paymentId} from wildcard search`);
-
-      // Update payment status
-      await conn.execute(`UPDATE payments SET status = ? WHERE id = ?`, [
-        status,
-        paymentId,
-      ]);
-
-      console.log(`Updated payment status to ${status} for ID ${paymentId}`);
-    } else {
-      // Update payment status with exact match
-      await conn.execute(
-        `UPDATE payments SET status = ? WHERE mpesa_receipt = ?`,
-        [status, CheckoutRequestID]
-      );
-
-      console.log(
-        `Updated payment status to ${status} for mpesa_receipt ${CheckoutRequestID}`
-      );
+      return res
+        .status(200)
+        .json({ resultCode: 0, resultDesc: "Payment not found" });
     }
 
-    // Additional validation to confirm the update worked
-    const [verifyUpdate] = await conn.execute(
-      `SELECT * FROM payments WHERE mpesa_receipt = ?`,
-      [CheckoutRequestID]
+    // Update payment status
+    const [updateResult] = await conn.execute(
+      `UPDATE payments SET status = ? WHERE mpesa_receipt = ?`,
+      [status, CheckoutRequestID]
     );
 
-    console.log(
-      "Post-update payment record:",
-      JSON.stringify(verifyUpdate[0] || "Not found", null, 2)
-    );
+    console.log("Update Result:", updateResult);
+    if (updateResult.affectedRows === 0) {
+      console.error("Payment update failed: No matching record found.");
+    } else {
+      console.log(`Successfully updated payment status to ${status}`);
+    }
 
-    console.log(
-      `M-Pesa callback processed successfully at ${new Date().toISOString()}`
-    );
     res
       .status(200)
       .json({ resultCode: 0, resultDesc: "Callback processed successfully" });
@@ -261,13 +215,9 @@ router.post("/callback", async (req, res) => {
     console.error("Error message:", error.message);
     console.error("Error stack:", error.stack);
 
-    // Always respond with 200 to M-Pesa to acknowledge receipt
     res
       .status(200)
-      .json({
-        resultCode: 0,
-        resultDesc: "Callback received with processing errors",
-      });
+      .json({ resultCode: 0, resultDesc: "Callback processing error" });
   }
 });
 
