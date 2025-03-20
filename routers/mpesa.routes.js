@@ -256,7 +256,7 @@ router.get("/payment-status/:checkoutRequestId", async (req, res) => {
   try {
     // First try exact match
     const [exactRows] = await conn.execute(
-      "SELECT id, status, created_at, updated_at FROM payments WHERE mpesa_receipt = ?",
+      "SELECT id, status, created_at FROM payments WHERE mpesa_receipt = ?",
       [checkoutRequestId]
     );
 
@@ -266,7 +266,7 @@ router.get("/payment-status/:checkoutRequestId", async (req, res) => {
     if (exactRows.length === 0) {
       console.log("No exact match found, trying substring match");
       const [wildcardRows] = await conn.execute(
-        "SELECT id, status, created_at, updated_at FROM payments WHERE mpesa_receipt LIKE ?",
+        "SELECT id, status, created_at FROM payments WHERE mpesa_receipt LIKE ?",
         [`%${checkoutRequestId}%`]
       );
 
@@ -286,7 +286,6 @@ router.get("/payment-status/:checkoutRequestId", async (req, res) => {
         status: wildcardRows[0].status,
         payment_id: wildcardRows[0].id,
         created_at: wildcardRows[0].created_at,
-        updated_at: wildcardRows[0].updated_at,
       });
     }
 
@@ -296,7 +295,6 @@ router.get("/payment-status/:checkoutRequestId", async (req, res) => {
       status: exactRows[0].status,
       payment_id: exactRows[0].id,
       created_at: exactRows[0].created_at,
-      updated_at: exactRows[0].updated_at,
     });
   } catch (error) {
     console.error("Error fetching payment status:", error);
