@@ -111,7 +111,7 @@ router.post(
 router.post("/callback", async (req, res) => {
   try {
     const { Body } = req.body;
-    console.log("Received M-Pesa Callback:", req.body); // Log the full request
+    console.log("Received M-Pesa Callback:", JSON.stringify(req.body, null, 2)); // Better logging
 
     if (!Body || !Body.stkCallback) {
       return res.status(400).json({ message: "Invalid callback data" });
@@ -123,20 +123,27 @@ router.post("/callback", async (req, res) => {
     // Check if the transaction was successful (ResultCode 0 means success)
     const status = ResultCode === 0 ? "Completed" : "Failed";
 
-    // If successful, extract MPesa receipt number
-    const mpesaReceipt =
-      ResultCode === 0
-        ? Body.stkCallback.CallbackMetadata.Item.find(
-            (item) => item.Name === "MpesaReceiptNumber"
-          )?.Value
-        : null;
-
-    // Update payment status in the database
-    await conn.execute(
-      `UPDATE payments SET status = ?, mpesa_receipt = ? WHERE mpesa_receipt = ?`,
-      [status, mpesaReceipt || "N/A", CheckoutRequestID]
+    // First, query to check if this payment exists
+    const [payments] = await conn.execute(
+      `SELECT * FROM payments WHERE mpesa_receipt = ?`,
+      [CheckoutRequestID]
     );
 
+    if (payments.length === 0) {
+      console.log(
+        `Payment with CheckoutRequestID ${CheckoutRequestID} not found in database`
+      );
+      return res.status(404).json({ message: "Payment record not found" });
+    }
+
+    // Update payment status in the database
+    // Keep the CheckoutRequestID in mpesa_receipt field
+    await conn.execute(
+      `UPDATE payments SET status = ? WHERE mpesa_receipt = ?`,
+      [status, CheckoutRequestID]
+    );
+
+    console.log(`Payment updated successfully for ${CheckoutRequestID}`);
     res.status(200).json({ message: "Payment status updated successfully" });
   } catch (error) {
     console.error("MPesa Callback Error:", error);
